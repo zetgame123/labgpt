@@ -6,6 +6,13 @@ from pathlib import Path
 
 from dotenv import dotenv_values, set_key
 
+from hotkeys import (
+    DEFAULT_HOTKEY_ANSWER,
+    DEFAULT_HOTKEY_CLEAR,
+    DEFAULT_HOTKEY_CLICK_THROUGH,
+    DEFAULT_HOTKEY_TOGGLE,
+)
+
 BASE_DIR = Path(__file__).resolve().parent
 ENV_PATH = BASE_DIR / ".env"
 
@@ -25,6 +32,10 @@ class AppConfig:
     user_role: str = DEFAULT_USER_ROLE
     opacity: float = 0.88
     audio_device: str = ""
+    hotkey_answer: str = DEFAULT_HOTKEY_ANSWER
+    hotkey_toggle: str = DEFAULT_HOTKEY_TOGGLE
+    hotkey_clear: str = DEFAULT_HOTKEY_CLEAR
+    hotkey_click_through: str = DEFAULT_HOTKEY_CLICK_THROUGH
 
     @classmethod
     def load(cls) -> "AppConfig":
@@ -59,6 +70,11 @@ class AppConfig:
             user_role=_get("USER_ROLE", DEFAULT_USER_ROLE) or DEFAULT_USER_ROLE,
             opacity=opacity,
             audio_device=_get("AUDIO_DEVICE", ""),
+            hotkey_answer=_get("HOTKEY_ANSWER", DEFAULT_HOTKEY_ANSWER) or DEFAULT_HOTKEY_ANSWER,
+            hotkey_toggle=_get("HOTKEY_TOGGLE", DEFAULT_HOTKEY_TOGGLE) or DEFAULT_HOTKEY_TOGGLE,
+            hotkey_clear=_get("HOTKEY_CLEAR", DEFAULT_HOTKEY_CLEAR) or DEFAULT_HOTKEY_CLEAR,
+            hotkey_click_through=_get("HOTKEY_CLICK_THROUGH", DEFAULT_HOTKEY_CLICK_THROUGH)
+            or DEFAULT_HOTKEY_CLICK_THROUGH,
         )
 
     def save(self) -> None:
@@ -72,3 +88,7 @@ class AppConfig:
         set_key(str(ENV_PATH), "USER_ROLE", self.user_role)
         set_key(str(ENV_PATH), "WINDOW_OPACITY", f"{self.opacity:.2f}")
         set_key(str(ENV_PATH), "AUDIO_DEVICE", self.audio_device)
+        set_key(str(ENV_PATH), "HOTKEY_ANSWER", self.hotkey_answer)
+        set_key(str(ENV_PATH), "HOTKEY_TOGGLE", self.hotkey_toggle)
+        set_key(str(ENV_PATH), "HOTKEY_CLEAR", self.hotkey_clear)
+        set_key(str(ENV_PATH), "HOTKEY_CLICK_THROUGH", self.hotkey_click_through)

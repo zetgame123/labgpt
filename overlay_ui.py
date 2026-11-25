@@ -7,7 +7,7 @@ import threading
 from typing import Optional
 
 from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QColor, QFont, QIcon
+from PyQt6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QFrame,
     QHBoxLayout,
+    QKeySequenceEdit,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -37,6 +38,13 @@ from ai_client import GroqAssistant
 from audio_capture import SystemAudioBuffer, list_loopback_devices
 from config import AppConfig
 from context_store import ContextStore, MAX_CONTEXT_CHARS
+from hotkeys import (
+    DEFAULT_HOTKEY_ANSWER,
+    DEFAULT_HOTKEY_CLEAR,
+    DEFAULT_HOTKEY_CLICK_THROUGH,
+    DEFAULT_HOTKEY_TOGGLE,
+    HotkeyManager,
+)
 from win_stealth import apply_capture_exclusion, is_capture_excluded, set_click_through
 
 _CODE_SEGMENT_RE = re.compile(r"(```[\s\S]*?(?:```|$)|`[^`\n]*`)")
@@ -215,6 +223,26 @@ class SettingsDialog(QDialog):
         self.opacity_slider.setValue(int(config.opacity * 100))
         form.addRow("Прозрачность:", self.opacity_slider)
 
+        hk_sep = QLabel("Горячие клавиши (нажми на поле и задай комбинацию):")
+        hk_sep.setStyleSheet("color: #93C5FD; font-weight: 600; margin-top: 6px;")
+        form.addRow(hk_sep)
+
+        self.hk_answer_edit = self._make_hotkey_edit(config.hotkey_answer)
+        form.addRow("Ответить:", self.hk_answer_edit)
+
+        self.hk_toggle_edit = self._make_hotkey_edit(config.hotkey_toggle)
+        form.addRow("Скрыть / показать:", self.hk_toggle_edit)
+
+        self.hk_clear_edit = self._make_hotkey_edit(config.hotkey_clear)
+        form.addRow("Очистить:", self.hk_clear_edit)
+
+        self.hk_clickthrough_edit = self._make_hotkey_edit(config.hotkey_click_through)
+        form.addRow("Клики сквозь:", self.hk_clickthrough_edit)
+
+        reset_hk_btn = QPushButton("Сбросить клавиши по умолчанию")
+        reset_hk_btn.clicked.connect(self._reset_hotkeys)
+        form.addRow("", reset_hk_btn)
+
         layout.addLayout(form)
 
         hint = QLabel(
@@ -230,6 +258,23 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    @staticmethod
+    def _make_hotkey_edit(seq_str: str) -> QKeySequenceEdit:
+        edit = QKeySequenceEdit(QKeySequence(seq_str))
+        edit.setMaximumSequenceLength(1)
+        edit.setStyleSheet(
+            "QKeySequenceEdit, QKeySequenceEdit QLineEdit { "
+            "background-color: #222632; color: #F3F5FA; "
+            "border: 1px solid #3A4052; border-radius: 6px; padding: 4px 8px; }"
+        )
+        return edit
+
+    def _reset_hotkeys(self) -> None:
+        self.hk_answer_edit.setKeySequence(QKeySequence(DEFAULT_HOTKEY_ANSWER))
+        self.hk_toggle_edit.setKeySequence(QKeySequence(DEFAULT_HOTKEY_TOGGLE))
+        self.hk_clear_edit.setKeySequence(QKeySequence(DEFAULT_HOTKEY_CLEAR))
+        self.hk_clickthrough_edit.setKeySequence(QKeySequence(DEFAULT_HOTKEY_CLICK_THROUGH))
 
     def _populate_devices(self, selected_device: str) -> None:
         self.device_combo.clear()
@@ -259,6 +304,15 @@ class SettingsDialog(QDialog):
         config.buffer_seconds = self.buffer_spin.value()
         config.use_web_search = self.search_check.isChecked()
         config.opacity = self.opacity_slider.value() / 100.0
+
+        def _seq(edit: QKeySequenceEdit, fallback: str) -> str:
+            text = edit.keySequence().toString(QKeySequence.SequenceFormat.PortableText).strip()
+            return text or fallback
+
+        config.hotkey_answer = _seq(self.hk_answer_edit, DEFAULT_HOTKEY_ANSWER)
+        config.hotkey_toggle = _seq(self.hk_toggle_edit, DEFAULT_HOTKEY_TOGGLE)
+        config.hotkey_clear = _seq(self.hk_clear_edit, DEFAULT_HOTKEY_CLEAR)
+        config.hotkey_click_through = _seq(self.hk_clickthrough_edit, DEFAULT_HOTKEY_CLICK_THROUGH)
 
 
 class ContextFilesDialog(QDialog):
@@ -404,12 +458,14 @@ class OverlayWindow(QWidget):
         audio_buffer: SystemAudioBuffer,
         assistant: GroqAssistant,
         context_store: ContextStore,
+        hotkey_manager: Optional[HotkeyManager] = None,
     ) -> None:
         super().__init__()
         self.config = config
         self.audio_buffer = audio_buffer
         self.assistant = assistant
         self.context_store = context_store
+        self.hotkey_manager = hotkey_manager
 
         self._drag_pos: Optional[QPoint] = None
         self._busy = False
@@ -433,6 +489,28 @@ class OverlayWindow(QWidget):
 
         self._render_welcome()
         self._update_files_badge()
+        self._apply_hotkeys()
+
+    def _apply_hotkeys(self) -> None:
+        self.answer_btn.setText(f"Ответить ({self.config.hotkey_answer})")
+        self.hide_btn.setToolTip(f"Свернуть ({self.config.hotkey_toggle})")
+        self.clear_btn.setToolTip(f"Очистить ответы и контекст ({self.config.hotkey_clear})")
+        self.clickthrough_btn.setToolTip(
+            f"Пропускать клики мыши сквозь окно ({self.config.hotkey_click_through})"
+        )
+        self.tray.setToolTip(f"Interview Helper ({self.config.hotkey_toggle} — показать/скрыть)")
+        if hasattr(self, "act_tray_toggle"):
+            self.act_tray_toggle.setText(f"Показать / Скрыть ({self.config.hotkey_toggle})")
+
+        if self.hotkey_manager is not None:
+            self.hotkey_manager.register(
+                [
+                    (self.config.hotkey_answer, lambda: self.sig_hotkey_answer.emit()),
+                    (self.config.hotkey_toggle, lambda: self.sig_hotkey_toggle_visible.emit()),
+                    (self.config.hotkey_clear, lambda: self.sig_hotkey_clear.emit()),
+                    (self.config.hotkey_click_through, lambda: self.sig_hotkey_click_through.emit()),
+                ]
+            )
 
     def _update_files_badge(self) -> None:
         count = self.context_store.file_count
@@ -602,9 +680,9 @@ class OverlayWindow(QWidget):
         self.tray.setToolTip("Interview Helper (Ctrl+Shift+H — показать/скрыть)")
 
         menu = QMenu()
-        act_toggle = QAction("Показать / Скрыть (Ctrl+Shift+H)", self)
-        act_toggle.triggered.connect(self.toggle_visibility)
-        menu.addAction(act_toggle)
+        self.act_tray_toggle = QAction(f"Показать / Скрыть ({self.config.hotkey_toggle})", self)
+        self.act_tray_toggle.triggered.connect(self.toggle_visibility)
+        menu.addAction(self.act_tray_toggle)
 
         act_settings = QAction("Настройки...", self)
         act_settings.triggered.connect(self.open_settings)
@@ -672,10 +750,10 @@ class OverlayWindow(QWidget):
         self._current_markdown = (
             f"### Готов к работе\n"
             f"{key_notice}\n"
-            f"- **Ctrl+Shift+Space** — ответить на последний вопрос из звука (буфер {self.config.buffer_seconds} сек)\n"
-            f"- **Ctrl+Shift+H** — скрыть / показать оверлей\n"
-            f"- **Ctrl+Shift+C** — очистить экран и контекст\n"
-            f"- **Ctrl+Shift+T** — режим кликов сквозь окно\n\n"
+            f"- **{self.config.hotkey_answer}** — ответить на последний вопрос из звука (буфер {self.config.buffer_seconds} сек)\n"
+            f"- **{self.config.hotkey_toggle}** — скрыть / показать оверлей\n"
+            f"- **{self.config.hotkey_clear}** — очистить экран и контекст\n"
+            f"- **{self.config.hotkey_click_through}** — режим кликов сквозь окно\n\n"
             f"*Окно не захватывается при демонстрации экрана (Zoom, Meet, Teams, Discord, OBS).*"
         )
         self.output.setMarkdown(self._current_markdown)
@@ -730,6 +808,10 @@ class OverlayWindow(QWidget):
         if was_click_through:
             self.clickthrough_btn.setChecked(False)
 
+        # Pause global hotkeys while recording new keybindings
+        if self.hotkey_manager is not None:
+            self.hotkey_manager.stop()
+
         dlg = SettingsDialog(self.config, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             dlg.apply_to(self.config)
@@ -741,6 +823,8 @@ class OverlayWindow(QWidget):
             self.setWindowOpacity(self.config.opacity)
             if not self._busy:
                 self._render_welcome()
+
+        self._apply_hotkeys()
 
         if was_click_through:
             self.clickthrough_btn.setChecked(True)

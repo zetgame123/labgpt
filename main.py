@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import sys
 
-from pynput import keyboard
 from PyQt6.QtWidgets import QApplication
 
 from ai_client import GroqAssistant
 from audio_capture import SystemAudioBuffer
 from config import AppConfig
 from context_store import ContextStore
+from hotkeys import HotkeyManager
 from overlay_ui import OverlayWindow
 
 
@@ -28,28 +28,20 @@ def main() -> int:
 
     context_store = ContextStore()
     assistant = GroqAssistant(config, context_store=context_store)
+    hotkey_manager = HotkeyManager()
     window = OverlayWindow(
         config=config,
         audio_buffer=audio_buffer,
         assistant=assistant,
         context_store=context_store,
+        hotkey_manager=hotkey_manager,
     )
     window.show()
-
-    hotkeys = keyboard.GlobalHotKeys(
-        {
-            "<ctrl>+<shift>+<space>": lambda: window.sig_hotkey_answer.emit(),
-            "<ctrl>+<shift>+h": lambda: window.sig_hotkey_toggle_visible.emit(),
-            "<ctrl>+<shift>+c": lambda: window.sig_hotkey_clear.emit(),
-            "<ctrl>+<shift>+t": lambda: window.sig_hotkey_click_through.emit(),
-        }
-    )
-    hotkeys.start()
 
     try:
         return app.exec()
     finally:
-        hotkeys.stop()
+        hotkey_manager.stop()
         audio_buffer.stop()
 
 

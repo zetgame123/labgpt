@@ -33,7 +33,7 @@ copy .env.example .env
 .\.venv\Scripts\python.exe main.py
 ```
 
-## Горячие клавиши
+## Горячие клавиши (по умолчанию, переназначаются в ⚙)
 
 | Комбинация | Действие |
 |---|---|
@@ -45,7 +45,8 @@ copy .env.example .env
 ## Структура проекта
 
 ```text
-├── main.py             # Точка входа и регистрация глобальных хоткеев
+├── main.py             # Точка входа
+├── hotkeys.py          # Менеджер глобальных горячих клавиш с переназначением на лету
 ├── overlay_ui.py       # PyQt6 оверлей, окно настроек и окно выбора файлов контекста
 ├── audio_capture.py    # Кольцевой буфер системного звука (WASAPI Loopback)
 ├── ai_client.py        # Клиент Groq API (Whisper STT + LLM streaming)
