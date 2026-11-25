@@ -15,6 +15,11 @@ WS_EX_TRANSPARENT = 0x00000020
 WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_NOACTIVATE = 0x08000000
 
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOZORDER = 0x0004
+SWP_FRAMECHANGED = 0x0020
+
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 
 _user32.SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
@@ -68,3 +73,12 @@ def set_click_through(hwnd: int, enabled: bool) -> None:
     else:
         style &= ~WS_EX_TRANSPARENT
     _SetWindowLong(wintypes.HWND(hwnd), GWL_EXSTYLE, style)
+    _user32.SetWindowPos(
+        wintypes.HWND(hwnd),
+        0,
+        0,
+        0,
+        0,
+        0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+    )
