@@ -49,15 +49,74 @@ from win_stealth import apply_capture_exclusion, is_capture_excluded, set_click_
 
 _CODE_SEGMENT_RE = re.compile(r"(```[\s\S]*?(?:```|$)|`[^`\n]*`)")
 
+_LATEX_REPLACEMENTS: list[tuple[str, str]] = [
+    (r"\leftrightarrow", "↔"),
+    (r"\Leftrightarrow", "⇔"),
+    (r"\rightarrow", "→"),
+    (r"\Rightarrow", "⇒"),
+    (r"\leftarrow", "←"),
+    (r"\Leftarrow", "⇐"),
+    (r"\implies", "⇒"),
+    (r"\iff", "⇔"),
+    (r"\mapsto", "↦"),
+    (r"\forall", "∀"),
+    (r"\exists", "∃"),
+    (r"\vdash", "⊢"),
+    (r"\models", "⊨"),
+    (r"\lnot", "¬"),
+    (r"\neg", "¬"),
+    (r"\land", "∧"),
+    (r"\wedge", "∧"),
+    (r"\lor", "∨"),
+    (r"\vee", "∨"),
+    (r"\leq", "≤"),
+    (r"\le", "≤"),
+    (r"\geq", "≥"),
+    (r"\ge", "≥"),
+    (r"\neq", "≠"),
+    (r"\ne", "≠"),
+    (r"\approx", "≈"),
+    (r"\equiv", "≡"),
+    (r"\times", "×"),
+    (r"\cdot", "·"),
+    (r"\notin", "∉"),
+    (r"\in", "∈"),
+    (r"\subseteq", "⊆"),
+    (r"\subset", "⊂"),
+    (r"\cup", "∪"),
+    (r"\cap", "∩"),
+    (r"\emptyset", "∅"),
+    (r"\infty", "∞"),
+    (r"\vdots", "⋮"),
+    (r"\ldots", "…"),
+    (r"\dots", "…"),
+    (r"\to", "→"),
+    (r"\;", " "),
+    (r"\,", " "),
+    (r"\quad", "  "),
+]
+
+_LATEX_DELIM_RE = re.compile(r"\\[\(\)\[\]]")
+_LATEX_FRAC_RE = re.compile(r"\\frac\{([^{}]+)\}\{([^{}]+)\}")
+
+
+def _clean_latex_in_prose(text: str) -> str:
+    text = _LATEX_FRAC_RE.sub(r"(\1) / (\2)", text)
+    for src, dst in _LATEX_REPLACEMENTS:
+        if src in text:
+            text = text.replace(src, dst)
+    text = _LATEX_DELIM_RE.sub("", text)
+    return text
+
 
 def _sanitize_markdown_for_qt(md: str) -> str:
     """
-    Escape '<' outside of fenced/inline code spans so Qt's Markdown renderer
-    does not swallow generics like Partial<T> or Pick<T, K> as raw HTML tags.
+    Escape '<' and normalize stray LaTeX tokens outside of fenced/inline code spans
+    so Qt's Markdown renderer does not swallow generics (Partial<T>) or show raw LaTeX.
     """
     parts = _CODE_SEGMENT_RE.split(md)
     for i in range(0, len(parts), 2):  # even indices are non-code prose
-        parts[i] = parts[i].replace("<", "&lt;")
+        parts[i] = _clean_latex_in_prose(parts[i]).replace("<", "&lt;")
     return "".join(parts)
 
 DARK_STYLESHEET = """
