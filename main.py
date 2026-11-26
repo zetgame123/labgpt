@@ -6,7 +6,7 @@ import sys
 
 from PyQt6.QtWidgets import QApplication
 
-from ai_client import GroqAssistant
+from ai_client import AIAssistant
 from audio_capture import SystemAudioBuffer
 from config import AppConfig
 from context_store import ContextStore
@@ -27,7 +27,7 @@ def main() -> int:
     audio_buffer.start()
 
     context_store = ContextStore()
-    assistant = GroqAssistant(config, context_store=context_store)
+    assistant = AIAssistant(config, context_store=context_store)
     hotkey_manager = HotkeyManager()
     window = OverlayWindow(
         config=config,

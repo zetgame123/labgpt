@@ -8,6 +8,7 @@ from ctypes import wintypes
 from typing import Callable, Optional
 
 DEFAULT_HOTKEY_ANSWER = "Ctrl+Shift+Space"
+DEFAULT_HOTKEY_SCREEN = "Ctrl+Shift+S"
 DEFAULT_HOTKEY_TOGGLE = "Ctrl+Shift+H"
 DEFAULT_HOTKEY_CLEAR = "Ctrl+Shift+C"
 DEFAULT_HOTKEY_CLICK_THROUGH = "Ctrl+Shift+T"

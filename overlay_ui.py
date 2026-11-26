@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QScrollArea,
     QSizeGrip,
     QSlider,
     QSpinBox,
@@ -34,17 +35,19 @@ from PyQt6.QtWidgets import (
     QMenu,
 )
 
-from ai_client import GroqAssistant
+from ai_client import AIAssistant
 from audio_capture import SystemAudioBuffer, list_loopback_devices
 from config import AppConfig
-from context_store import ContextStore, MAX_CONTEXT_CHARS
+from context_store import ContextStore
 from hotkeys import (
     DEFAULT_HOTKEY_ANSWER,
     DEFAULT_HOTKEY_CLEAR,
     DEFAULT_HOTKEY_CLICK_THROUGH,
+    DEFAULT_HOTKEY_SCREEN,
     DEFAULT_HOTKEY_TOGGLE,
     HotkeyManager,
 )
+from screen_capture import capture_screen_jpeg
 from win_stealth import apply_capture_exclusion, is_capture_excluded, set_click_through
 
 _CODE_SEGMENT_RE = re.compile(r"(```[\s\S]*?(?:```|$)|`[^`\n]*`)")
@@ -211,10 +214,12 @@ class SettingsDialog(QDialog):
             | Qt.WindowType.Tool
         )
         self.setWindowTitle("Настройки Interview Helper")
-        self.setMinimumWidth(440)
+        self.setMinimumWidth(470)
+        self.setMaximumHeight(680)
         self.setStyleSheet(
             """
             QDialog { background-color: #16181F; color: #E6E9F0; font-family: 'Segoe UI'; }
+            QScrollArea { background: transparent; border: none; }
             QLabel { color: #DCE1EB; font-size: 12.5px; }
             QLineEdit, QComboBox, QSpinBox {
                 background-color: #222632; color: #F3F5FA;
@@ -229,9 +234,26 @@ class SettingsDialog(QDialog):
             """
         )
 
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-        form.setSpacing(10)
+        outer_layout = QVBoxLayout(self)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        form_host = QWidget()
+        form_host.setStyleSheet("background-color: #16181F;")
+        form = QFormLayout(form_host)
+        form.setSpacing(8)
+        form.setContentsMargins(2, 2, 8, 2)
+
+        self.provider_combo = QComboBox()
+        self.provider_combo.addItem("Groq (бесплатно, быстро, до 14K симв. контекста)", "groq")
+        self.provider_combo.addItem("OpenAI (большие проекты до 120K + считывание экрана)", "openai")
+        p_idx = self.provider_combo.findData(config.provider)
+        self.provider_combo.setCurrentIndex(p_idx if p_idx >= 0 else 0)
+        form.addRow("Провайдер:", self.provider_combo)
+
+        groq_sep = QLabel("Groq API (бесплатный ключ: console.groq.com/keys)")
+        groq_sep.setStyleSheet("color: #93C5FD; font-weight: 600; margin-top: 4px;")
+        form.addRow(groq_sep)
 
         self.api_key_edit = QLineEdit(config.api_key)
         self.api_key_edit.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
@@ -246,7 +268,36 @@ class SettingsDialog(QDialog):
             "openai/gpt-oss-20b",
         ])
         self.model_combo.setCurrentText(config.model)
-        form.addRow("Модель:", self.model_combo)
+        form.addRow("Модель Groq:", self.model_combo)
+
+        openai_sep = QLabel("OpenAI API (большие проекты + анализ экрана)")
+        openai_sep.setStyleSheet("color: #6EE7B7; font-weight: 600; margin-top: 4px;")
+        form.addRow(openai_sep)
+
+        self.openai_key_edit = QLineEdit(config.openai_api_key)
+        self.openai_key_edit.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
+        self.openai_key_edit.setPlaceholderText("sk-... (platform.openai.com/api-keys)")
+        form.addRow("OpenAI API Key:", self.openai_key_edit)
+
+        self.openai_model_combo = QComboBox()
+        self.openai_model_combo.setEditable(True)
+        self.openai_model_combo.addItems([
+            "gpt-4.1-mini",
+            "gpt-4.1",
+            "gpt-4o",
+            "gpt-4o-mini",
+            "o4-mini",
+        ])
+        self.openai_model_combo.setCurrentText(config.openai_model)
+        form.addRow("Модель OpenAI:", self.openai_model_combo)
+
+        self.openai_base_url_edit = QLineEdit(config.openai_base_url)
+        self.openai_base_url_edit.setPlaceholderText("Опционально (пусто = api.openai.com)")
+        form.addRow("OpenAI Base URL:", self.openai_base_url_edit)
+
+        gen_sep = QLabel("Общие настройки")
+        gen_sep.setStyleSheet("color: #93C5FD; font-weight: 600; margin-top: 4px;")
+        form.addRow(gen_sep)
 
         self.role_edit = QLineEdit(config.user_role)
         self.role_edit.setPlaceholderText("Например: Python Backend разработчик")
@@ -273,7 +324,7 @@ class SettingsDialog(QDialog):
         self.buffer_spin.setValue(config.buffer_seconds)
         form.addRow("Буфер звука:", self.buffer_spin)
 
-        self.search_check = QCheckBox("Веб-поиск (browser_search для gpt-oss)")
+        self.search_check = QCheckBox("Веб-поиск (browser_search для Groq gpt-oss)")
         self.search_check.setChecked(config.use_web_search)
         form.addRow("", self.search_check)
 
@@ -287,7 +338,10 @@ class SettingsDialog(QDialog):
         form.addRow(hk_sep)
 
         self.hk_answer_edit = self._make_hotkey_edit(config.hotkey_answer)
-        form.addRow("Ответить:", self.hk_answer_edit)
+        form.addRow("Ответить (звук):", self.hk_answer_edit)
+
+        self.hk_screen_edit = self._make_hotkey_edit(config.hotkey_screen)
+        form.addRow("Считать экран:", self.hk_screen_edit)
 
         self.hk_toggle_edit = self._make_hotkey_edit(config.hotkey_toggle)
         form.addRow("Скрыть / показать:", self.hk_toggle_edit)
@@ -302,21 +356,22 @@ class SettingsDialog(QDialog):
         reset_hk_btn.clicked.connect(self._reset_hotkeys)
         form.addRow("", reset_hk_btn)
 
-        layout.addLayout(form)
+        scroll.setWidget(form_host)
+        outer_layout.addWidget(scroll, stretch=1)
 
         hint = QLabel(
-            "Ключ создаётся бесплатно на console.groq.com/keys. Речь распознаётся через whisper-large-v3-turbo."
+            "Подсказка: если вставить OpenAI API Key, кнопка «Экран» будет работать даже при выбранном провайдере Groq."
         )
         hint.setStyleSheet("color: #8E97AB; font-size: 11px;")
         hint.setWordWrap(True)
-        layout.addWidget(hint)
+        outer_layout.addWidget(hint)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        outer_layout.addWidget(buttons)
 
     @staticmethod
     def _make_hotkey_edit(seq_str: str) -> QKeySequenceEdit:
@@ -331,6 +386,7 @@ class SettingsDialog(QDialog):
 
     def _reset_hotkeys(self) -> None:
         self.hk_answer_edit.setKeySequence(QKeySequence(DEFAULT_HOTKEY_ANSWER))
+        self.hk_screen_edit.setKeySequence(QKeySequence(DEFAULT_HOTKEY_SCREEN))
         self.hk_toggle_edit.setKeySequence(QKeySequence(DEFAULT_HOTKEY_TOGGLE))
         self.hk_clear_edit.setKeySequence(QKeySequence(DEFAULT_HOTKEY_CLEAR))
         self.hk_clickthrough_edit.setKeySequence(QKeySequence(DEFAULT_HOTKEY_CLICK_THROUGH))
@@ -356,8 +412,12 @@ class SettingsDialog(QDialog):
         self.activateWindow()
 
     def apply_to(self, config: AppConfig) -> None:
+        config.provider = str(self.provider_combo.currentData() or "groq")
         config.api_key = self.api_key_edit.text().strip()
         config.model = self.model_combo.currentText().strip() or "openai/gpt-oss-120b"
+        config.openai_api_key = self.openai_key_edit.text().strip()
+        config.openai_model = self.openai_model_combo.currentText().strip() or "gpt-4.1-mini"
+        config.openai_base_url = self.openai_base_url_edit.text().strip()
         config.user_role = self.role_edit.text().strip() or "Software Engineer"
         config.audio_device = str(self.device_combo.currentData() or "").strip()
         config.buffer_seconds = self.buffer_spin.value()
@@ -369,15 +429,22 @@ class SettingsDialog(QDialog):
             return text or fallback
 
         config.hotkey_answer = _seq(self.hk_answer_edit, DEFAULT_HOTKEY_ANSWER)
+        config.hotkey_screen = _seq(self.hk_screen_edit, DEFAULT_HOTKEY_SCREEN)
         config.hotkey_toggle = _seq(self.hk_toggle_edit, DEFAULT_HOTKEY_TOGGLE)
         config.hotkey_clear = _seq(self.hk_clear_edit, DEFAULT_HOTKEY_CLEAR)
         config.hotkey_click_through = _seq(self.hk_clickthrough_edit, DEFAULT_HOTKEY_CLICK_THROUGH)
 
 
 class ContextFilesDialog(QDialog):
-    def __init__(self, store: ContextStore, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        store: ContextStore,
+        max_chars: int = 14_000,
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
         self.store = store
+        self.max_chars = max_chars
         self.setWindowFlags(
             self.windowFlags()
             | Qt.WindowType.WindowStaysOnTopHint
@@ -457,8 +524,8 @@ class ContextFilesDialog(QDialog):
         total = self.store.total_chars
         mode = (
             "все файлы передаются целиком"
-            if total <= MAX_CONTEXT_CHARS
-            else f"автовыбор релевантных фрагментов до {MAX_CONTEXT_CHARS // 1000}K симв. (чтобы не превышать лимит Groq)"
+            if total <= self.max_chars
+            else f"автовыбор релевантных фрагментов до {self.max_chars // 1000}K симв."
         )
         summary = f"Файлов: {self.store.file_count} | Объём: {total:,} симв. (~{total // 4:,} токенов) — {mode}."
         if note:
@@ -507,6 +574,7 @@ class OverlayWindow(QWidget):
 
     # Global hotkey triggers
     sig_hotkey_answer = pyqtSignal()
+    sig_hotkey_screen = pyqtSignal()
     sig_hotkey_toggle_visible = pyqtSignal()
     sig_hotkey_clear = pyqtSignal()
     sig_hotkey_click_through = pyqtSignal()
@@ -515,7 +583,7 @@ class OverlayWindow(QWidget):
         self,
         config: AppConfig,
         audio_buffer: SystemAudioBuffer,
-        assistant: GroqAssistant,
+        assistant: AIAssistant,
         context_store: ContextStore,
         hotkey_manager: Optional[HotkeyManager] = None,
     ) -> None:
@@ -552,6 +620,7 @@ class OverlayWindow(QWidget):
 
     def _apply_hotkeys(self) -> None:
         self.answer_btn.setText(f"Ответить ({self.config.hotkey_answer})")
+        self.screen_btn.setToolTip(f"Считать экран через OpenAI Vision ({self.config.hotkey_screen})")
         self.hide_btn.setToolTip(f"Свернуть ({self.config.hotkey_toggle})")
         self.clear_btn.setToolTip(f"Очистить ответы и контекст ({self.config.hotkey_clear})")
         self.clickthrough_btn.setToolTip(
@@ -565,6 +634,7 @@ class OverlayWindow(QWidget):
             self.hotkey_manager.register(
                 [
                     (self.config.hotkey_answer, lambda: self.sig_hotkey_answer.emit()),
+                    (self.config.hotkey_screen, lambda: self.sig_hotkey_screen.emit()),
                     (self.config.hotkey_toggle, lambda: self.sig_hotkey_toggle_visible.emit()),
                     (self.config.hotkey_clear, lambda: self.sig_hotkey_clear.emit()),
                     (self.config.hotkey_click_through, lambda: self.sig_hotkey_click_through.emit()),
@@ -585,7 +655,7 @@ class OverlayWindow(QWidget):
         if was_click_through:
             self.clickthrough_btn.setChecked(False)
 
-        dlg = ContextFilesDialog(self.context_store, self)
+        dlg = ContextFilesDialog(self.context_store, max_chars=self.config.max_context_chars, parent=self)
         dlg.exec()
         self._update_files_badge()
 
@@ -650,6 +720,10 @@ class OverlayWindow(QWidget):
         header_layout.addWidget(self.stealth_badge)
 
         header_layout.addStretch()
+
+        self.screen_btn = QPushButton("Экран")
+        self.screen_btn.setToolTip(f"Считать экран через OpenAI Vision ({self.config.hotkey_screen})")
+        header_layout.addWidget(self.screen_btn)
 
         self.files_btn = QPushButton("Файлы")
         self.files_btn.setCheckable(True)
@@ -761,6 +835,7 @@ class OverlayWindow(QWidget):
         self.tray.show()
 
     def _connect_signals(self) -> None:
+        self.screen_btn.clicked.connect(self.trigger_screen_answer)
         self.files_btn.clicked.connect(self.open_context_files)
         self.answer_btn.clicked.connect(self.trigger_audio_answer)
         self.input_edit.returnPressed.connect(self.trigger_text_answer)
@@ -777,6 +852,7 @@ class OverlayWindow(QWidget):
         self.sig_stream_error.connect(self._on_stream_error)
 
         self.sig_hotkey_answer.connect(self.trigger_audio_answer)
+        self.sig_hotkey_screen.connect(self.trigger_screen_answer)
         self.sig_hotkey_toggle_visible.connect(self.toggle_visibility)
         self.sig_hotkey_clear.connect(self.clear_all)
         self.sig_hotkey_click_through.connect(self.toggle_click_through)
@@ -801,15 +877,22 @@ class OverlayWindow(QWidget):
             )
 
     def _render_welcome(self) -> None:
+        active_key = self.config.openai_api_key if self.config.provider == "openai" else self.config.api_key
+        provider_label = (
+            f"OpenAI ({self.config.openai_model}, контекст до 120K)"
+            if self.config.provider == "openai"
+            else f"Groq ({self.config.model}, контекст до 14K)"
+        )
         key_notice = (
             ""
-            if self.config.api_key
-            else "\n> **Нужен ключ:** нажми **⚙** сверху и вставь бесплатный `GROQ_API_KEY` с [console.groq.com/keys](https://console.groq.com/keys).\n"
+            if active_key
+            else "\n> **Нужен ключ:** нажми **⚙** сверху и вставь `GROQ_API_KEY` или `OPENAI_API_KEY`.\n"
         )
         self._current_markdown = (
-            f"### Готов к работе\n"
+            f"### Готов к работе · `{provider_label}`\n"
             f"{key_notice}\n"
             f"- **{self.config.hotkey_answer}** — ответить на последний вопрос из звука (буфер {self.config.buffer_seconds} сек)\n"
+            f"- **{self.config.hotkey_screen}** — считать и разобрать экран (через OpenAI Vision)\n"
             f"- **{self.config.hotkey_toggle}** — скрыть / показать оверлей\n"
             f"- **{self.config.hotkey_clear}** — очистить экран и контекст\n"
             f"- **{self.config.hotkey_click_through}** — режим кликов сквозь окно\n\n"
@@ -910,6 +993,34 @@ class OverlayWindow(QWidget):
             fn=lambda: self.assistant.ask_from_audio_stream(wav_bytes, extra_note=extra_note),
         )
 
+    def trigger_screen_answer(self) -> None:
+        if self._busy:
+            return
+        if not self.isVisible():
+            self.show()
+
+        if not self.config.openai_api_key:
+            self.output.setMarkdown(
+                "**Для считывания экрана нужен OpenAI API Key.**\n\n"
+                "Открой настройки (**⚙**) и вставь ключ `OPENAI_API_KEY` (`sk-...`)."
+            )
+            return
+
+        extra_note = self.input_edit.text().strip()
+        if extra_note:
+            self.input_edit.clear()
+
+        try:
+            jpeg_bytes, (w, h) = capture_screen_jpeg()
+        except Exception as exc:
+            self.output.setMarkdown(f"**Ошибка захвата экрана:**\n\n`{exc}`")
+            return
+
+        self._start_worker(
+            header=f"Анализирую экран ({w}×{h}, {self.config.openai_model})...",
+            fn=lambda: self.assistant.ask_from_screen_stream(jpeg_bytes, extra_note=extra_note),
+        )
+
     def trigger_text_answer(self) -> None:
         if self._busy:
             return
@@ -925,6 +1036,7 @@ class OverlayWindow(QWidget):
     def _start_worker(self, header: str, fn) -> None:
         self._busy = True
         self.answer_btn.setEnabled(False)
+        self.screen_btn.setEnabled(False)
         self.sig_stream_start.emit(header)
 
         def _run() -> None:
@@ -951,12 +1063,14 @@ class OverlayWindow(QWidget):
     def _on_stream_done(self) -> None:
         self._busy = False
         self.answer_btn.setEnabled(True)
+        self.screen_btn.setEnabled(True)
         if not self._current_markdown.strip():
             self.output.setMarkdown("*Пустой ответ от модели.*")
 
     def _on_stream_error(self, err: str) -> None:
         self._busy = False
         self.answer_btn.setEnabled(True)
+        self.screen_btn.setEnabled(True)
         self.output.setMarkdown(f"**Ошибка:**\n\n`{err}`")
 
     # Drag window by header bar
