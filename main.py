@@ -11,6 +11,7 @@ from audio_capture import SystemAudioBuffer
 from config import AppConfig
 from context_store import ContextStore
 from hotkeys import HotkeyManager
+from live_transcript import LiveTranscriber
 from overlay_ui import OverlayWindow
 
 
@@ -28,6 +29,13 @@ def main() -> int:
 
     context_store = ContextStore()
     assistant = AIAssistant(config, context_store=context_store)
+    live_transcriber = LiveTranscriber(
+        audio_buffer=audio_buffer,
+        assistant=assistant,
+        enabled=config.live_transcript,
+    )
+    live_transcriber.start()
+
     hotkey_manager = HotkeyManager()
     window = OverlayWindow(
         config=config,
@@ -35,6 +43,7 @@ def main() -> int:
         assistant=assistant,
         context_store=context_store,
         hotkey_manager=hotkey_manager,
+        live_transcriber=live_transcriber,
     )
     window.show()
 
@@ -42,6 +51,7 @@ def main() -> int:
         return app.exec()
     finally:
         hotkey_manager.stop()
+        live_transcriber.stop()
         audio_buffer.stop()
 
 

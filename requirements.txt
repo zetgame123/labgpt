@@ -7,3 +7,5 @@ python-dotenv>=1.0.1
 numpy>=1.26.0
 mss>=9.0.1
 Pillow>=10.0.0
+pypdf>=5.0.0
+python-docx>=1.1.0

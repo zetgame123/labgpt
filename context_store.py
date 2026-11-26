@@ -38,6 +38,7 @@ ALLOWED_EXTS = {
     ".html", ".htm", ".css", ".scss", ".less", ".vue", ".svelte",
     ".sql", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".xml", ".env",
     ".md", ".txt", ".rst", ".csv", ".sh", ".bat", ".ps1", ".ipynb",
+    ".pdf", ".docx",
 }
 
 _WORD_RE = re.compile(r"[a-zA-Zа-яА-ЯёЁ0-9_]{2,}")
@@ -69,9 +70,47 @@ def _read_ipynb(path: Path) -> str:
     return "\n\n".join(parts)
 
 
+def _read_pdf(path: Path) -> str:
+    from pypdf import PdfReader
+
+    reader = PdfReader(str(path))
+    pages: list[str] = []
+    for idx, page in enumerate(reader.pages, 1):
+        txt = (page.extract_text() or "").strip()
+        if txt:
+            pages.append(f"--- Стр. {idx} ---\n{txt}")
+    if not pages:
+        raise ValueError("PDF не содержит извлекаемого текста (возможно, это скан)")
+    return "\n\n".join(pages)
+
+
+def _read_docx(path: Path) -> str:
+    from docx import Document
+
+    doc = Document(str(path))
+    parts: list[str] = []
+    for para in doc.paragraphs:
+        t = para.text.strip()
+        if t:
+            parts.append(t)
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells if c.text.strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+    if not parts:
+        raise ValueError("DOCX пустой")
+    return "\n".join(parts)
+
+
 def _read_text_file(path: Path) -> str:
-    if path.suffix.lower() == ".ipynb":
+    ext = path.suffix.lower()
+    if ext == ".ipynb":
         return _read_ipynb(path)
+    if ext == ".pdf":
+        return _read_pdf(path)
+    if ext == ".docx":
+        return _read_docx(path)
     raw = path.read_bytes()
     # Skip obvious binary files
     if b"\x00" in raw[:4096]:
@@ -160,7 +199,7 @@ class ContextStore:
                 continue
             if any(part in SKIP_DIRS for part in p.parts):
                 continue
-            if p.suffix.lower() in ALLOWED_EXTS and p.stat().st_size <= 512_000:
+            if p.suffix.lower() in ALLOWED_EXTS and p.stat().st_size <= 5_000_000:
                 collected.append(str(p))
         return self.add_files(collected)
 

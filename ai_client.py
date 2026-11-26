@@ -12,7 +12,23 @@ from config import AppConfig
 from context_store import ContextStore
 
 
-def _build_system_prompt(user_role: str) -> str:
+def _build_system_prompt(user_role: str, answer_style: str = "brief") -> str:
+    if answer_style == "detailed":
+        style_rules = (
+            "3. Режим ответа — **ПОДРОБНЫЙ + КОД**:\n"
+            "   - Короткая суть в 1–2 предложениях.\n"
+            "   - Пошаговое объяснение механизма / архитектуры.\n"
+            "   - Чистый рабочий пример кода (если уместно).\n"
+            "   - Сложность, подводные камни и частые edge-кейсы.\n"
+        )
+    else:
+        style_rules = (
+            "3. Режим ответа — **ТЕЗИСНЫЙ (ультракороткий)**:\n"
+            "   - Суть в 1 предложении.\n"
+            "   - 3–4 коротких буллита, которые легко прочитать глазами за 3 секунды и пересказать своими словами.\n"
+            "   - Код — только если без него нельзя, максимально компактно.\n"
+        )
+
     return (
         f"Ты — быстрый и точный ассистент-подсказчик для кандидата на техническом собеседовании "
         f"(позиция: {user_role}).\n"
@@ -21,10 +37,7 @@ def _build_system_prompt(user_role: str) -> str:
         "собеседника в одну короткую строку формата: **Вопрос:** <суть вопроса>.\n"
         "2. Если передан скриншот экрана, сразу определи, что на нём (задача, тест, код, ошибка, вопрос) "
         "и дай точное решение / объяснение.\n"
-        "3. Дай чёткий, практичный и структурированный ответ, который легко быстро прочитать глазами и пересказать своими словами:\n"
-        "   - Короткая суть в 1–2 предложениях.\n"
-        "   - Ключевые тезисы списком (3–5 пунктов максимум).\n"
-        "   - Если нужен код или команда — минимальный чистый пример.\n"
+        f"{style_rules}"
         "4. Не лей воду, не пиши приветствий и оговорок. Отвечай на том же языке, на котором задан вопрос (обычно русский).\n"
         "5. НИКОГДА не используй LaTeX-разметку (`\\(...\\)`, `\\[...\\]`, `$$...$$`, `\\frac`, `\\rightarrow`, `\\begin{array}` и т.п.) — окно её не рендерит. "
         "Для формул, логики и математики пиши только чистый читаемый Unicode (`→`, `↔`, `⇒`, `¬`, `∧`, `∨`, `∀`, `∃`, `⊢`, `≤`, `≥`, `≠`, `∈`, `⊆`, `∅`, `∞`, `²`, `³`, дроби через `/`, а многострочные правила вывода — в обычном текстовом блоке ```).\n"
@@ -58,6 +71,9 @@ class AIAssistant:
     def clear_history(self) -> None:
         self._history.clear()
 
+    def has_stt_key(self) -> bool:
+        return bool(self.config.api_key or self.config.openai_api_key)
+
     def _ensure_groq(self) -> Groq:
         if not self.config.api_key:
             raise ValueError(
@@ -84,7 +100,7 @@ class AIAssistant:
         query_hint: str = "",
         max_context_chars: int | None = None,
     ) -> list[dict[str, Any]]:
-        system_text = _build_system_prompt(self.config.user_role)
+        system_text = _build_system_prompt(self.config.user_role, self.config.answer_style)
         if self.context_store and self.context_store.file_count > 0:
             budget = max_context_chars if max_context_chars is not None else self.config.max_context_chars
             ctx = self.context_store.build_context_prompt(
@@ -183,6 +199,23 @@ class AIAssistant:
             yield from self._stream_openai(messages, history_label)
         else:
             yield from self._stream_groq(messages, history_label)
+
+    def ask_from_transcript_stream(self, transcript: str, extra_note: str = "") -> Generator[str, None, None]:
+        clean_t = transcript.strip()
+        if not clean_t:
+            yield "**Лента речи пуста.**\n\nПодожди, пока собеседник начнёт говорить, или допиши вопрос вручную."
+            return
+
+        # Keep the last ~3500 chars of rolling dialogue so prompt stays crisp
+        tail = clean_t[-3500:]
+        user_content = (
+            f"Лента последних минут разговора на собеседовании (последние реплики в самом конце):\n\"\"\"\n{tail}\n\"\"\"\n\n"
+            "Сфокусируйся на самом последнем вопросе или теме собеседника (учитывая контекст выше) и дай точный ответ."
+        )
+        if extra_note.strip():
+            user_content += f"\nДополнительная заметка кандидата: {extra_note.strip()}"
+
+        yield from self._stream_completion(user_content, history_label=tail[-240:])
 
     def ask_from_audio_stream(self, wav_bytes: bytes, extra_note: str = "") -> Generator[str, None, None]:
         transcript = self.transcribe_audio(wav_bytes)

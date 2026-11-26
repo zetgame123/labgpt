@@ -47,6 +47,7 @@ from hotkeys import (
     DEFAULT_HOTKEY_TOGGLE,
     HotkeyManager,
 )
+from live_transcript import LiveTranscriber
 from screen_capture import capture_screen_jpeg
 from win_stealth import apply_capture_exclusion, is_capture_excluded, set_click_through
 
@@ -282,6 +283,7 @@ class SettingsDialog(QDialog):
         self.openai_model_combo = QComboBox()
         self.openai_model_combo.setEditable(True)
         self.openai_model_combo.addItems([
+            "deepseek-v4.1-flash",
             "deepseek-chat",
             "deepseek-reasoner",
             "gpt-4.1-mini",
@@ -329,6 +331,24 @@ class SettingsDialog(QDialog):
         self.search_check = QCheckBox("Веб-поиск (browser_search для Groq gpt-oss)")
         self.search_check.setChecked(config.use_web_search)
         form.addRow("", self.search_check)
+
+        self.live_check = QCheckBox("Фоновая живая расшифровка диалога (последние 5 мин)")
+        self.live_check.setChecked(config.live_transcript)
+        form.addRow("", self.live_check)
+
+        self.style_combo = QComboBox()
+        self.style_combo.addItem("Тезисно (3–4 буллита, быстро прочитать)", "brief")
+        self.style_combo.addItem("Подробно + код (разбор, примеры, edge-кейсы)", "detailed")
+        st_idx = self.style_combo.findData(config.answer_style)
+        self.style_combo.setCurrentIndex(st_idx if st_idx >= 0 else 0)
+        form.addRow("Стиль ответа:", self.style_combo)
+
+        self.screen_mode_combo = QComboBox()
+        self.screen_mode_combo.addItem("Весь монитор (под курсором)", "monitor")
+        self.screen_mode_combo.addItem("Только активное окно", "active_window")
+        sm_idx = self.screen_mode_combo.findData(config.screen_capture_mode)
+        self.screen_mode_combo.setCurrentIndex(sm_idx if sm_idx >= 0 else 0)
+        form.addRow("Захват экрана:", self.screen_mode_combo)
 
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(35, 100)
@@ -424,6 +444,9 @@ class SettingsDialog(QDialog):
         config.audio_device = str(self.device_combo.currentData() or "").strip()
         config.buffer_seconds = self.buffer_spin.value()
         config.use_web_search = self.search_check.isChecked()
+        config.live_transcript = self.live_check.isChecked()
+        config.answer_style = str(self.style_combo.currentData() or "brief")
+        config.screen_capture_mode = str(self.screen_mode_combo.currentData() or "monitor")
         config.opacity = self.opacity_slider.value() / 100.0
 
         def _seq(edit: QKeySequenceEdit, fallback: str) -> str:
@@ -537,9 +560,9 @@ class ContextFilesDialog(QDialog):
     def _on_add_files(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "Выбери файлы лаб / кода",
+            "Выбери файлы лаб / PDF / кода",
             "",
-            "Код и текст (*.py *.ts *.tsx *.js *.jsx *.cpp *.c *.h *.cs *.java *.go *.rs *.sql *.html *.css *.json *.md *.txt *.ipynb);;Все файлы (*.*)",
+            "Код, PDF и текст (*.pdf *.docx *.py *.ts *.tsx *.js *.jsx *.cpp *.c *.h *.cs *.java *.go *.rs *.sql *.html *.css *.json *.md *.txt *.ipynb);;Все файлы (*.*)",
         )
         if paths:
             added, errs = self.store.add_files(paths)
@@ -588,6 +611,7 @@ class OverlayWindow(QWidget):
         assistant: AIAssistant,
         context_store: ContextStore,
         hotkey_manager: Optional[HotkeyManager] = None,
+        live_transcriber: Optional[LiveTranscriber] = None,
     ) -> None:
         super().__init__()
         self.config = config
@@ -595,6 +619,7 @@ class OverlayWindow(QWidget):
         self.assistant = assistant
         self.context_store = context_store
         self.hotkey_manager = hotkey_manager
+        self.live_transcriber = live_transcriber
 
         self._drag_pos: Optional[QPoint] = None
         self._busy = False
@@ -607,7 +632,7 @@ class OverlayWindow(QWidget):
         self._connect_signals()
         self._setup_tray()
 
-        self.resize(540, 420)
+        self.resize(620, 440)
         self._position_top_right()
         self.setWindowOpacity(self.config.opacity)
 
@@ -622,7 +647,7 @@ class OverlayWindow(QWidget):
 
     def _apply_hotkeys(self) -> None:
         self.answer_btn.setText(f"Ответить ({self.config.hotkey_answer})")
-        self.screen_btn.setToolTip(f"Считать экран через OpenAI Vision ({self.config.hotkey_screen})")
+        self._update_screen_btn_label()
         self.hide_btn.setToolTip(f"Свернуть ({self.config.hotkey_toggle})")
         self.clear_btn.setToolTip(f"Очистить ответы и контекст ({self.config.hotkey_clear})")
         self.clickthrough_btn.setToolTip(
@@ -724,19 +749,26 @@ class OverlayWindow(QWidget):
         header_layout.addStretch()
 
         self.screen_btn = QPushButton("Экран")
-        self.screen_btn.setToolTip(f"Считать экран через OpenAI Vision ({self.config.hotkey_screen})")
+        self.screen_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.screen_btn.customContextMenuRequested.connect(self._toggle_screen_mode)
         header_layout.addWidget(self.screen_btn)
 
         self.files_btn = QPushButton("Файлы")
         self.files_btn.setCheckable(True)
-        self.files_btn.setToolTip("Прикрепить файлы лаб / кода в контекст")
+        self.files_btn.setToolTip("Прикрепить файлы лаб / PDF / кода в контекст")
         header_layout.addWidget(self.files_btn)
 
-        self.search_btn = QPushButton("Поиск")
-        self.search_btn.setCheckable(True)
-        self.search_btn.setChecked(self.config.use_web_search)
-        self.search_btn.setToolTip("Вкл/выкл веб-поиск (browser_search)")
-        header_layout.addWidget(self.search_btn)
+        self.style_btn = QPushButton("Подробно" if self.config.answer_style == "detailed" else "Тезисно")
+        self.style_btn.setCheckable(True)
+        self.style_btn.setChecked(self.config.answer_style == "detailed")
+        self.style_btn.setToolTip("Переключить стиль ответа: Тезисно / Подробно + код")
+        header_layout.addWidget(self.style_btn)
+
+        self.live_btn = QPushButton("Live")
+        self.live_btn.setCheckable(True)
+        self.live_btn.setChecked(self.config.live_transcript)
+        self.live_btn.setToolTip("Фоновая расшифровка диалога (лента последних 5 минут)")
+        header_layout.addWidget(self.live_btn)
 
         self.clickthrough_btn = QPushButton("Сквозь")
         self.clickthrough_btn.setCheckable(True)
@@ -845,7 +877,8 @@ class OverlayWindow(QWidget):
         self.settings_btn.clicked.connect(self.open_settings)
         self.hide_btn.clicked.connect(self.hide)
         self.close_btn.clicked.connect(QApplication.quit)
-        self.search_btn.toggled.connect(self._on_search_toggled)
+        self.style_btn.toggled.connect(self._on_style_toggled)
+        self.live_btn.toggled.connect(self._on_live_toggled)
         self.clickthrough_btn.toggled.connect(self._on_click_through_toggled)
 
         self.sig_stream_start.connect(self._on_stream_start)
@@ -923,9 +956,37 @@ class OverlayWindow(QWidget):
                 short_dev = short_dev[:20] + "…"
             self.status_label.setText(short_dev)
 
-    def _on_search_toggled(self, checked: bool) -> None:
-        self.config.use_web_search = checked
+    def _update_screen_btn_label(self) -> None:
+        if self.config.screen_capture_mode == "active_window":
+            self.screen_btn.setText("Окно")
+            self.screen_btn.setToolTip(
+                f"Считать активное окно ({self.config.hotkey_screen}) · ПКМ — переключить на весь монитор"
+            )
+        else:
+            self.screen_btn.setText("Экран")
+            self.screen_btn.setToolTip(
+                f"Считать весь монитор ({self.config.hotkey_screen}) · ПКМ — переключить на активное окно"
+            )
+
+    def _toggle_screen_mode(self) -> None:
+        self.config.screen_capture_mode = (
+            "monitor" if self.config.screen_capture_mode == "active_window" else "active_window"
+        )
+        self.config.save()
+        self._update_screen_btn_label()
+        if not self._busy:
+            self._render_welcome()
+
+    def _on_style_toggled(self, checked: bool) -> None:
+        self.config.answer_style = "detailed" if checked else "brief"
+        self.style_btn.setText("Подробно" if checked else "Тезисно")
         self.assistant.update_config(self.config)
+        self.config.save()
+
+    def _on_live_toggled(self, checked: bool) -> None:
+        self.config.live_transcript = checked
+        if self.live_transcriber is not None:
+            self.live_transcriber.set_enabled(checked)
         self.config.save()
 
     def _on_click_through_toggled(self, checked: bool) -> None:
@@ -945,6 +1006,8 @@ class OverlayWindow(QWidget):
     def clear_all(self) -> None:
         self.assistant.clear_history()
         self.audio_buffer.clear()
+        if self.live_transcriber is not None:
+            self.live_transcriber.clear()
         self._render_welcome()
 
     def open_settings(self) -> None:
@@ -963,7 +1026,9 @@ class OverlayWindow(QWidget):
             self.assistant.update_config(self.config)
             self.audio_buffer.set_buffer_seconds(self.config.buffer_seconds)
             self.audio_buffer.set_device(self.config.audio_device)
-            self.search_btn.setChecked(self.config.use_web_search)
+            self.style_btn.setChecked(self.config.answer_style == "detailed")
+            self.live_btn.setChecked(self.config.live_transcript)
+            self._update_screen_btn_label()
             self.setWindowOpacity(self.config.opacity)
             if not self._busy:
                 self._render_welcome()
@@ -979,11 +1044,29 @@ class OverlayWindow(QWidget):
         if not self.isVisible():
             self.show()
 
-        wav_bytes, duration = self.audio_buffer.get_wav_bytes()
         extra_note = self.input_edit.text().strip()
         if extra_note:
             self.input_edit.clear()
 
+        if self.live_transcriber is not None and self.live_transcriber.enabled:
+            def _live_stream():
+                transcript = self.live_transcriber.flush_and_get_transcript()
+                if transcript:
+                    yield from self.assistant.ask_from_transcript_stream(transcript, extra_note=extra_note)
+                    return
+                wav_bytes, _dur = self.audio_buffer.get_wav_bytes()
+                if not wav_bytes:
+                    yield "**В буфере тишина.**\n\nУбедись, что звук собеседника идёт на выбранное устройство вывода, и попробуй ещё раз."
+                    return
+                yield from self.assistant.ask_from_audio_stream(wav_bytes, extra_note=extra_note)
+
+            self._start_worker(
+                header="Отвечаю по ленте диалога (Live 5 мин)...",
+                fn=_live_stream,
+            )
+            return
+
+        wav_bytes, duration = self.audio_buffer.get_wav_bytes()
         if not wav_bytes:
             self.output.setMarkdown(
                 "**В буфере тишина.**\n\nУбедись, что звук собеседника идёт на устройство вывода по умолчанию, и попробуй ещё раз."
@@ -1003,8 +1086,8 @@ class OverlayWindow(QWidget):
 
         if not self.config.openai_api_key:
             self.output.setMarkdown(
-                "**Для считывания экрана нужен OpenAI API Key.**\n\n"
-                "Открой настройки (**⚙**) и вставь ключ `OPENAI_API_KEY` (`sk-...`)."
+                "**Для считывания экрана нужен ключ OpenAI-совместимого API.**\n\n"
+                "Открой настройки (**⚙**) и вставь ключ (например, OpenAI, OpenRouter или DeepSeek V4.1 Flash)."
             )
             return
 
@@ -1013,13 +1096,16 @@ class OverlayWindow(QWidget):
             self.input_edit.clear()
 
         try:
-            jpeg_bytes, (w, h) = capture_screen_jpeg()
+            jpeg_bytes, (w, h), source_label = capture_screen_jpeg(
+                mode=self.config.screen_capture_mode,
+                exclude_hwnd=int(self.winId()),
+            )
         except Exception as exc:
             self.output.setMarkdown(f"**Ошибка захвата экрана:**\n\n`{exc}`")
             return
 
         self._start_worker(
-            header=f"Анализирую экран ({w}×{h}, {self.config.openai_model})...",
+            header=f"Анализирую {source_label} ({w}×{h}, {self.config.openai_model})...",
             fn=lambda: self.assistant.ask_from_screen_stream(jpeg_bytes, extra_note=extra_note),
         )
 

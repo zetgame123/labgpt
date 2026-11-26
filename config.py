@@ -41,6 +41,9 @@ class AppConfig:
     user_role: str = DEFAULT_USER_ROLE
     opacity: float = 0.88
     audio_device: str = ""
+    live_transcript: bool = True
+    answer_style: str = "brief"          # "brief" | "detailed"
+    screen_capture_mode: str = "monitor" # "monitor" | "active_window"
     hotkey_answer: str = DEFAULT_HOTKEY_ANSWER
     hotkey_screen: str = DEFAULT_HOTKEY_SCREEN
     hotkey_toggle: str = DEFAULT_HOTKEY_TOGGLE
@@ -80,6 +83,15 @@ class AppConfig:
             opacity = 0.88
 
         use_search = _get("USE_WEB_SEARCH", "0").lower() in ("1", "true", "yes", "on")
+        live_transcript = _get("LIVE_TRANSCRIPT", "1").lower() in ("1", "true", "yes", "on")
+
+        answer_style = _get("ANSWER_STYLE", "brief").lower()
+        if answer_style not in ("brief", "detailed"):
+            answer_style = "brief"
+
+        screen_mode = _get("SCREEN_CAPTURE_MODE", "monitor").lower()
+        if screen_mode not in ("monitor", "active_window"):
+            screen_mode = "monitor"
 
         return cls(
             provider=provider,
@@ -95,6 +107,9 @@ class AppConfig:
             user_role=_get("USER_ROLE", DEFAULT_USER_ROLE) or DEFAULT_USER_ROLE,
             opacity=opacity,
             audio_device=_get("AUDIO_DEVICE", ""),
+            live_transcript=live_transcript,
+            answer_style=answer_style,
+            screen_capture_mode=screen_mode,
             hotkey_answer=_get("HOTKEY_ANSWER", DEFAULT_HOTKEY_ANSWER) or DEFAULT_HOTKEY_ANSWER,
             hotkey_screen=_get("HOTKEY_SCREEN", DEFAULT_HOTKEY_SCREEN) or DEFAULT_HOTKEY_SCREEN,
             hotkey_toggle=_get("HOTKEY_TOGGLE", DEFAULT_HOTKEY_TOGGLE) or DEFAULT_HOTKEY_TOGGLE,
@@ -119,6 +134,9 @@ class AppConfig:
         set_key(str(ENV_PATH), "USER_ROLE", self.user_role)
         set_key(str(ENV_PATH), "WINDOW_OPACITY", f"{self.opacity:.2f}")
         set_key(str(ENV_PATH), "AUDIO_DEVICE", self.audio_device)
+        set_key(str(ENV_PATH), "LIVE_TRANSCRIPT", "1" if self.live_transcript else "0")
+        set_key(str(ENV_PATH), "ANSWER_STYLE", self.answer_style)
+        set_key(str(ENV_PATH), "SCREEN_CAPTURE_MODE", self.screen_capture_mode)
         set_key(str(ENV_PATH), "HOTKEY_ANSWER", self.hotkey_answer)
         set_key(str(ENV_PATH), "HOTKEY_SCREEN", self.hotkey_screen)
         set_key(str(ENV_PATH), "HOTKEY_TOGGLE", self.hotkey_toggle)

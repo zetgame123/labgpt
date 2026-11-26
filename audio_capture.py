@@ -239,3 +239,28 @@ class SystemAudioBuffer:
             wf.setframerate(TARGET_SAMPLE_RATE)
             wf.writeframes(combined.tobytes())
         return buf.getvalue(), duration
+
+    def get_wav_bytes_between(self, start_ts: float, end_ts: Optional[float] = None) -> tuple[bytes, float]:
+        """Return (wav_bytes, duration_seconds) for buffered audio in [start_ts, end_ts]."""
+        hi = end_ts if end_ts is not None else time.monotonic()
+        with self._lock:
+            selected = [chunk for ts, chunk in self._chunks if start_ts <= ts <= hi]
+
+        if not selected:
+            return b"", 0.0
+
+        combined = np.concatenate(selected)
+        duration = len(combined) / float(TARGET_SAMPLE_RATE)
+        if duration < 0.4:
+            return b"", 0.0
+
+        if int(np.max(np.abs(combined))) < 35:
+            return b"", 0.0
+
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(TARGET_SAMPLE_RATE)
+            wf.writeframes(combined.tobytes())
+        return buf.getvalue(), duration
