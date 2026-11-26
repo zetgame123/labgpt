@@ -246,7 +246,7 @@ class SettingsDialog(QDialog):
 
         self.provider_combo = QComboBox()
         self.provider_combo.addItem("Groq (бесплатно, быстро, до 14K симв. контекста)", "groq")
-        self.provider_combo.addItem("OpenAI (большие проекты до 120K + считывание экрана)", "openai")
+        self.provider_combo.addItem("OpenAI-совместимый (DeepSeek / OpenRouter / OpenAI, до 120K)", "openai")
         p_idx = self.provider_combo.findData(config.provider)
         self.provider_combo.setCurrentIndex(p_idx if p_idx >= 0 else 0)
         form.addRow("Провайдер:", self.provider_combo)
@@ -270,18 +270,20 @@ class SettingsDialog(QDialog):
         self.model_combo.setCurrentText(config.model)
         form.addRow("Модель Groq:", self.model_combo)
 
-        openai_sep = QLabel("OpenAI API (большие проекты + анализ экрана)")
+        openai_sep = QLabel("OpenAI-совместимый API (DeepSeek / OpenRouter / OpenAI / Proxy)")
         openai_sep.setStyleSheet("color: #6EE7B7; font-weight: 600; margin-top: 4px;")
         form.addRow(openai_sep)
 
         self.openai_key_edit = QLineEdit(config.openai_api_key)
         self.openai_key_edit.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
-        self.openai_key_edit.setPlaceholderText("sk-... (platform.openai.com/api-keys)")
-        form.addRow("OpenAI API Key:", self.openai_key_edit)
+        self.openai_key_edit.setPlaceholderText("sk-... (ключ OpenAI / DeepSeek / OpenRouter)")
+        form.addRow("API Key:", self.openai_key_edit)
 
         self.openai_model_combo = QComboBox()
         self.openai_model_combo.setEditable(True)
         self.openai_model_combo.addItems([
+            "deepseek-chat",
+            "deepseek-reasoner",
             "gpt-4.1-mini",
             "gpt-4.1",
             "gpt-4o",
@@ -289,11 +291,11 @@ class SettingsDialog(QDialog):
             "o4-mini",
         ])
         self.openai_model_combo.setCurrentText(config.openai_model)
-        form.addRow("Модель OpenAI:", self.openai_model_combo)
+        form.addRow("Модель:", self.openai_model_combo)
 
         self.openai_base_url_edit = QLineEdit(config.openai_base_url)
-        self.openai_base_url_edit.setPlaceholderText("Опционально (пусто = api.openai.com)")
-        form.addRow("OpenAI Base URL:", self.openai_base_url_edit)
+        self.openai_base_url_edit.setPlaceholderText("Напр.: https://api.deepseek.com или https://openrouter.ai/api/v1")
+        form.addRow("Base URL:", self.openai_base_url_edit)
 
         gen_sep = QLabel("Общие настройки")
         gen_sep.setStyleSheet("color: #93C5FD; font-weight: 600; margin-top: 4px;")

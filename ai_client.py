@@ -102,21 +102,24 @@ class AIAssistant:
         return messages
 
     def transcribe_audio(self, wav_bytes: bytes) -> str:
-        if self.config.provider == "openai":
-            client = self._ensure_openai()
+        # Always prefer free, ultra-fast Groq Whisper when GROQ_API_KEY is present —
+        # this also lets OpenAI-compatible providers without /audio/transcriptions
+        # (like DeepSeek API or OpenRouter) work seamlessly with voice input!
+        if self.config.api_key:
+            client = self._ensure_groq()
             transcription = client.audio.transcriptions.create(
-                file=("audio.wav", wav_bytes, "audio/wav"),
-                model=self.config.openai_stt_model,
+                file=("audio.wav", wav_bytes),
+                model=self.config.stt_model,
                 response_format="text",
+                temperature=0.0,
             )
             return str(transcription).strip()
 
-        client = self._ensure_groq()
+        client = self._ensure_openai()
         transcription = client.audio.transcriptions.create(
-            file=("audio.wav", wav_bytes),
-            model=self.config.stt_model,
+            file=("audio.wav", wav_bytes, "audio/wav"),
+            model=self.config.openai_stt_model,
             response_format="text",
-            temperature=0.0,
         )
         return str(transcription).strip()
 
@@ -156,8 +159,8 @@ class AIAssistant:
             "max_completion_tokens": 1800,
             "stream": True,
         }
-        # Reasoning models (o1/o3/o4) reject custom temperature
-        if not model.lower().startswith(("o1", "o3", "o4")):
+        # Reasoning models (o1/o3/o4, deepseek-reasoner) reject custom temperature
+        if not model.lower().startswith(("o1", "o3", "o4")) and "reasoner" not in model.lower():
             kwargs["temperature"] = 0.3
 
         stream = client.chat.completions.create(**kwargs)
